@@ -35,7 +35,7 @@ jobs:
             exit 1
           fi
           unzip -o "$ZIP_FILE" -d extracted
-          PROJECT_DIR=$(find extracted -name settings.gradle -printf '%h\n' | head -n 1)
+          PROJECT_DIR=$(find extracted \( -name settings.gradle -o -name settings.gradle.kts \) -printf '%h\n' | head -n 1)
           if [ -z "$PROJECT_DIR" ]; then
             echo "Android project not found"
             exit 1
