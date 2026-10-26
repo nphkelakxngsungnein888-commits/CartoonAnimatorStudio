@@ -8,13 +8,21 @@ on:
 permissions:
   contents: write
 
+# กัน build สองรอบรันพร้อมกันแล้วแย่งกันเขียน Release "latest" (รอบใหม่ยกเลิกรอบเก่าที่ยังไม่เสร็จ)
+concurrency:
+  group: build-apk
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Download project files
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # ต้องมีประวัติ commit ครบ เพื่อรู้ว่า ZIP ไฟล์ไหนถูกอัปโหลดล่าสุด
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -29,12 +37,25 @@ jobs:
 
       - name: Extract Android project
         run: |
-          ZIP_FILE=$(find . -maxdepth 1 -name '*.zip' -print -quit)
+          # ถ้ามี ZIP หลายไฟล์ใน repo ให้เลือกไฟล์ที่ถูก commit ล่าสุด (เดิมหยิบไฟล์แรกที่เจอ ซึ่งอาจเป็นไฟล์เก่า = build โค้ดเก่า)
+          ZIP_FILE=""
+          BEST=-1
+          for f in ./*.zip; do
+            [ -e "$f" ] || continue
+            T=$(git log -1 --format=%ct -- "$f" 2>/dev/null || true)
+            T=${T:-0}
+            if [ "$T" -ge "$BEST" ]; then
+              BEST=$T
+              ZIP_FILE=$f
+            fi
+          done
           if [ -z "$ZIP_FILE" ]; then
             echo "Project ZIP not found"
             exit 1
           fi
-          unzip -o "$ZIP_FILE" -d extracted
+          echo "Using project ZIP: $ZIP_FILE (committed at $BEST)"
+          rm -rf extracted
+          unzip -o -q "$ZIP_FILE" -d extracted
           PROJECT_DIR=$(find extracted \( -name settings.gradle -o -name settings.gradle.kts \) -printf '%h\n' | head -n 1)
           if [ -z "$PROJECT_DIR" ]; then
             echo "Android project not found"
@@ -56,8 +77,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(find extracted -path '*/app/build/outputs/apk/debug/app-debug.apk' -print -quit)
+          if [ -z "$APK" ]; then
+            echo "APK not found"
+            exit 1
+          fi
           cp "$APK" CartoonAnimatorStudio.apk
           gh release delete latest --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" || true
-          git tag -f latest "$GITHUB_SHA"
-          git push -f origin refs/tags/latest
-          gh release create latest CartoonAnimatorStudio.apk --repo "$GITHUB_REPOSITORY" --verify-tag --title "Latest build" --notes "Build #${{ github.run_number }}"
+          gh release create latest CartoonAnimatorStudio.apk --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Latest build" --notes "Build #${{ github.run_number }}"
+          
